@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:textAlignment="viewStart"
+        android:text="Checking permissions..." />
+
+    <Button
+        android:id="@+id/overlayButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="Grant overlay permission" />
+
+    <Button
+        android:id="@+id/accessibilityButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="Open accessibility settings" />
+
+    <Button
+        android:id="@+id/folderButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Choose image folder" />
+
+    <TextView
+        android:id="@+id/instructionsText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:textAlignment="viewStart"
+        android:lineSpacingExtra="4dp"
+        android:text="How this works:\n\n1. Tap &quot;Grant overlay permission&quot; above and allow it.\n\n2. Open Settings, search for this app, open its app info page, tap the three-dot menu in the top right corner, and choose &quot;Allow restricted settings&quot;.\n\n3. Tap &quot;Open accessibility settings&quot; above, find this app on the list, and turn on the main toggle.\n\n4. Tap &quot;Choose image folder&quot; and pick the folder with the images you want to send.\n\n5. Open WhatsApp - a small floating button will appear in the bottom-right corner. Tap it to paste a random image into the chat you have open." />
+
+</LinearLayout>
