@@ -20,6 +20,8 @@ public class MainActivity extends AppCompatActivity {
     private Button overlayButton;
     private Button accessibilityButton;
     private Button folderButton;
+    private final int grantedColor = Color.parseColor("#4CAF50");
+    private final int notGrantedColor = Color.parseColor("#9E9E9E");
 
     private final ActivityResultLauncher<Uri> folderPicker =
             registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), this::onFolderPicked);
@@ -55,6 +57,17 @@ public class MainActivity extends AppCompatActivity {
 
     private void onFolderPicked(Uri uri) {
         if (uri == null) return; // user cancelled the picker
+
+        String previous = getSharedPreferences(Prefs.NAME, MODE_PRIVATE)
+                .getString(Prefs.KEY_FOLDER_URI, null);
+        if (previous != null) {
+            try {
+                getContentResolver().releasePersistableUriPermission(
+                        Uri.parse(previous), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException e) {
+                // already gone (e.g. folder deleted) - nothing to release
+            }
+        }
 
         getContentResolver().takePersistableUriPermission(uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -95,7 +108,7 @@ public class MainActivity extends AppCompatActivity {
     private void styleButton(Button button, boolean granted, String defaultText, String grantedText) {
         button.setText(granted ? grantedText : defaultText);
         button.setBackgroundTintList(ColorStateList.valueOf(
-                granted ? Color.parseColor("#4CAF50") : Color.parseColor("#9E9E9E")));
+                granted ? grantedColor : notGrantedColor));
     }
 
     private boolean isAccessibilityServiceEnabled() {

@@ -16,6 +16,7 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.ImageView;
+import android.widget.Toast;
 
 import java.util.List;
 
@@ -25,12 +26,6 @@ import java.util.List;
  * Reused by two triggers - a floating bubble shown only while inside a
  * WhatsApp conversation, and a Quick Settings tile (RandomImageTileService)
  * that calls sendRandomImage() directly on the running instance.
- *
- * Bubble visibility uses a self-starting/self-stopping poll: a window-state
- * event mentioning WhatsApp starts polling, and polling stops itself after a
- * few consecutive checks confirm WhatsApp is gone - so there is no
- * continuous cost while WhatsApp isn't in use at all.
- *
  * While the notification shade / Quick Settings panel itself is the active
  * window, bubble visibility is left untouched rather than hidden: on this
  * device, hiding the bubble removes an OS-generated "overlay running"
@@ -42,8 +37,8 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
     private static final String TAG = "WaBubbleA11y";
     private static final String WHATSAPP_PACKAGE = "com.whatsapp";
     private static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
-    private static final long POLL_INTERVAL_MS = 1000;
-    private static final int MAX_CONSECUTIVE_MISSES = 5;
+    private static final long SAFETY_NET_INTERVAL_MS = 5000;
+    private static final int MAX_CONSECUTIVE_MISSES = 2;
     private static final int MAX_SEND_CLICK_ATTEMPTS = 6;
     private static final long SEND_CLICK_RETRY_DELAY_MS = 250;
     private static final int MAX_PASTE_FIELD_ATTEMPTS = 5;
@@ -54,45 +49,68 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
     private WindowManager windowManager;
     private View bubbleView;
     private boolean awaitingSendScreen = false;
-    private boolean pollingActive = false;
+    private boolean safetyNetActive = false;
     private int consecutiveMisses = 0;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable foregroundChecker = new Runnable() {
+
+    /**
+     * Re-checks whether the bubble should be shown right now and updates it.
+     * Called immediately on every relevant window-change event (the fast,
+     * near-zero-cost path), and also from the slow safety net below.
+     * Returns whether WhatsApp was found on screen at all, so the safety net
+     * doesn't need to ask twice.
+     */
+    private boolean evaluateBubble() {
+        AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
+        CharSequence activePkg = activeRoot != null ? activeRoot.getPackageName() : null;
+
+        if (activePkg != null && SYSTEM_UI_PACKAGE.contentEquals(activePkg)) {
+            // shade/panel is on top - leave bubble state exactly as is,
+            // and don't count this as a miss, we're clearly still around
+            return true;
+        }
+
+        boolean onScreen = isWhatsAppOnScreen();
+
+        if (!onScreen) {
+            hideBubble();
+        } else {
+            // only show inside an actual conversation, not the chat list -
+            // see findMessageComposeField() for how those are told apart
+            boolean insideConversation = findMessageComposeField(activeRoot) != null;
+            if (insideConversation) {
+                showBubble();
+            } else {
+                hideBubble();
+            }
+        }
+        return onScreen;
+    }
+
+    /**
+     * Slow fallback (every 5s, not every 1s) in case some transition doesn't
+     * fire a usable window-change event on this device - the fast path above
+     * already handles every transition confirmed to fire one. Self-stops
+     * after a couple of consecutive misses, same as before.
+     */
+    private final Runnable safetyNet = new Runnable() {
         @Override
         public void run() {
-            AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
-            CharSequence activePkg = activeRoot != null ? activeRoot.getPackageName() : null;
+            boolean onScreen = evaluateBubble();
 
-            if (activePkg != null && SYSTEM_UI_PACKAGE.contentEquals(activePkg)) {
-                // shade/panel is on top - leave bubble state exactly as is
-                handler.postDelayed(this, POLL_INTERVAL_MS);
-                return;
-            }
-
-            boolean onScreen = isWhatsAppOnScreen();
-
-            if (!onScreen) {
-                consecutiveMisses++;
-                hideBubble();
-            } else {
+            if (onScreen) {
                 consecutiveMisses = 0;
-                // only show inside an actual conversation, not the chat list -
-                // see findMessageComposeField() for how those are told apart
-                boolean insideConversation = findMessageComposeField(activeRoot) != null;
-                if (insideConversation) {
-                    showBubble();
-                } else {
-                    hideBubble();
-                }
+            } else {
+                consecutiveMisses++;
             }
 
             if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
-                pollingActive = false;
-                return; // do not reschedule - loop stays stopped until woken up again
+                safetyNetActive = false;
+                return; // do not reschedule - stays stopped until woken up again
             }
 
-            handler.postDelayed(this, POLL_INTERVAL_MS);
+            handler.postDelayed(this, SAFETY_NET_INTERVAL_MS);
         }
     };
 
@@ -130,16 +148,18 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
             tryClickSend(1);
         }
 
+        evaluateBubble(); // fast path: react immediately, regardless of which app this event is about
+
         if (mentionsWhatsApp) {
-            startPollingIfNeeded();
+            startSafetyNetIfNeeded();
         }
     }
 
-    private void startPollingIfNeeded() {
-        if (pollingActive) return;
-        pollingActive = true;
+    private void startSafetyNetIfNeeded() {
+        if (safetyNetActive) return;
+        safetyNetActive = true;
         consecutiveMisses = 0;
-        handler.post(foregroundChecker);
+        handler.postDelayed(safetyNet, SAFETY_NET_INTERVAL_MS);
     }
 
     @Override
@@ -148,7 +168,7 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
-        handler.removeCallbacks(foregroundChecker);
+        handler.removeCallbacks(safetyNet);
         hideBubble();
         instance = null;
         super.onDestroy();
@@ -199,8 +219,15 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
 
     private void hideBubble() {
         if (bubbleView == null) return;
-        windowManager.removeView(bubbleView);
-        bubbleView = null;
+        try {
+            windowManager.removeView(bubbleView);
+        }
+        catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+        finally {
+            bubbleView = null;
+        }
     }
 
     /**
@@ -211,7 +238,7 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
     void sendRandomImage() {
         Uri imageUri = ImagePicker.pickRandomImage(this);
         if (imageUri == null) {
-            Log.d(TAG, "no image available in the chosen folder");
+            Toast.makeText(this, "No images found in the chosen folder", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -222,28 +249,19 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
     }
 
     private void findFieldAndPaste(int attempt) {
-        AccessibilityNodeInfo field = findComposeField();
+        AccessibilityNodeInfo field = isWhatsAppTheActiveWindow() ? findComposeField() : null;
 
         if (field != null) {
             field.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             boolean pasted = field.performAction(AccessibilityNodeInfo.ACTION_PASTE);
-            if (!pasted) {
-                Log.d(TAG, "paste action was rejected by the field");
-            }
             if (pasted) {
                 awaitingSendScreen = true;
             }
             return;
         }
 
-        if (attempt == 1 && !isWhatsAppTheActiveWindow()) {
-            // something else (e.g. the Quick Settings panel we were just tapped from)
-            // is covering WhatsApp - collapse it and try again
-            performGlobalAction(GLOBAL_ACTION_BACK);
-        }
-
         if (attempt >= MAX_PASTE_FIELD_ATTEMPTS) {
-            Log.d(TAG, "no compose field found - probably not inside a chat");
+            Toast.makeText(this, "Couldn't find a chat to paste into", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -283,6 +301,8 @@ public class WaBubbleAccessibilityService extends AccessibilityService {
     }
 
     private void tryClickSend(int attempt) {
+        if (!isWhatsAppTheActiveWindow()) return; // left WhatsApp before Send could be clicked - abort quietly
+
         AccessibilityNodeInfo root = getRootInActiveWindow();
         AccessibilityNodeInfo sendButton = root != null ? findByDescriptionOrText(root, "send", "wyślij") : null;
 
