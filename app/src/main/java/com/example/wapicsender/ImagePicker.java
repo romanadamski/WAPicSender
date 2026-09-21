@@ -29,7 +29,6 @@ import java.util.Random;
  */
 final class ImagePicker {
 
-    private static final int HISTORY_SIZE = 10;
     private static final Random random = new Random();
 
     private ImagePicker() {
@@ -57,7 +56,9 @@ final class ImagePicker {
             }
         }
 
+
         if (images.isEmpty()) return null;
+        int count = images.size();
 
         List<Uri> candidates = new ArrayList<>(images);
         candidates.removeAll(recentlyPicked);
@@ -69,7 +70,8 @@ final class ImagePicker {
 
         // Save last picked, remove older than HISTORY_SIZE
         recentlyPicked.add(picked);
-        if (recentlyPicked.size() > HISTORY_SIZE) {
+        var historySize = count / 3;
+        if (recentlyPicked.size() > historySize) {
             recentlyPicked.removeFirst();
         }
 
